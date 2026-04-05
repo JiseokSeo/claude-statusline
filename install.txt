@@ -1,0 +1,10 @@
+== Claude Code Statusline - Install ==
+
+# 1. Clone & Install
+git clone <repo-url> claude-statusline
+cd claude-statusline
+bash install.sh
+
+# 2. Restart Claude Code
+
+# Requirements: Node.js 18+, Claude Code with OAuth login
