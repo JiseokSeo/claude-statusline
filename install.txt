@@ -1,7 +1,7 @@
 == Claude Code Statusline - Install ==
 
 # 1. Clone & Install
-git clone <repo-url> claude-statusline
+git clone https://github.com/JiseokSeo/claude-statusline.git
 cd claude-statusline
 bash install.sh
 

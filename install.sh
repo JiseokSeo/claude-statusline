@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLAUDE_DIR="$HOME/.claude"
+CLAUDE_DIR="${USERPROFILE:-$HOME}/.claude"
 SCRIPTS_DIR="$CLAUDE_DIR/scripts"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,11 +25,15 @@ if [ -f "$SETTINGS_FILE" ]; then
   if command -v node &>/dev/null; then
     node -e "
       const fs = require('fs');
-      const existing = JSON.parse(fs.readFileSync('$SETTINGS_FILE', 'utf8'));
-      const incoming = JSON.parse(fs.readFileSync('$REPO_DIR/settings.json', 'utf8'));
+      const path = require('path');
+      const home = process.env.USERPROFILE || process.env.HOME;
+      const settingsFile = path.join(home, '.claude', 'settings.json');
+      const incomingFile = path.join(process.argv[1], 'settings.json');
+      const existing = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+      const incoming = JSON.parse(fs.readFileSync(incomingFile, 'utf8'));
       const merged = { ...existing, ...incoming };
-      fs.writeFileSync('$SETTINGS_FILE', JSON.stringify(merged, null, 2) + '\n');
-    "
+      fs.writeFileSync(settingsFile, JSON.stringify(merged, null, 2) + '\n');
+    " "$REPO_DIR"
     echo "[ok] settings.json merged (existing keys preserved)"
   else
     echo "[warn] node not found — copying settings.json (backup: settings.json.bak)"
