@@ -1,8 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
-const CACHE_FILE = path.join(process.env.USERPROFILE || process.env.HOME, '.claude', 'cache', 'rate_limit.json');
+const CLAUDE_DIR = path.join(process.env.USERPROFILE || process.env.HOME, '.claude');
+const CACHE_FILE = path.join(CLAUDE_DIR, 'cache', 'rate_limit.json');
+const CACHE_TTL_MS = 5 * 60 * 1000; // refresh if cache is older than 5 minutes
 
 // ANSI color helpers (One Dark inspired, muted tones)
 const c = {
@@ -61,14 +63,21 @@ function readStdinSync() {
   }
   const ctx = `${c.dim}ctx:${pctColor(ctxPct)}${ctxPct.toFixed(1)}%${c.reset}`;
 
-  // 3. Rate limit (from cache)
+  // 3. Rate limit (from cache, with background stale-while-revalidate)
   let rl = `${c.dim}rl:-/-${c.reset}`;
   try {
     if (fs.existsSync(CACHE_FILE)) {
       const cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
       if (cache.usage_pct !== undefined && cache.reset_in !== undefined) {
         const rlPct = parseFloat(cache.usage_pct);
-        rl = `${c.dim}rl:${pctColor(rlPct)}${cache.usage_pct}%${c.dim}/${cache.reset_in}${c.reset}`;
+        const stale = cache.updated_at && (Date.now() - new Date(cache.updated_at).getTime()) > CACHE_TTL_MS;
+        const staleMarker = stale ? `${c.dim}~` : '';
+        rl = `${c.dim}rl:${staleMarker}${pctColor(rlPct)}${cache.usage_pct}%${c.dim}/${cache.reset_in}${c.reset}`;
+        if (stale) {
+          // Trigger background refresh without blocking the status line render
+          const refreshScript = path.join(CLAUDE_DIR, 'scripts', 'session_start.js');
+          spawn('node', [refreshScript], { detached: true, stdio: 'ignore' }).unref();
+        }
       }
     }
   } catch (e) {}
