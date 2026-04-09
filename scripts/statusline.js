@@ -4,7 +4,8 @@ const { execSync, spawn } = require('child_process');
 
 const CLAUDE_DIR = path.join(process.env.USERPROFILE || process.env.HOME, '.claude');
 const CACHE_FILE = path.join(CLAUDE_DIR, 'cache', 'rate_limit.json');
-const CACHE_TTL_MS = 5 * 60 * 1000; // refresh if cache is older than 5 minutes
+const CACHE_TTL_MS      = 2  * 60 * 1000; // background refresh threshold
+const CACHE_SYNC_TTL_MS = 30 * 60 * 1000; // synchronous refresh threshold (long idle)
 
 // ANSI color helpers (One Dark inspired, muted tones)
 const c = {
@@ -50,35 +51,48 @@ function readStdinSync() {
   // 1. Model name
   const model = `${c.model}${d.model?.display_name ?? d.model?.id ?? 'unknown'}${c.reset}`;
 
-  // 2. Context window percentage
-  const ctxWindow = d.context_window ?? {};
-  let ctxPct = ctxWindow.used_percentage;
+  // 2. Context window percentage (support both snake_case and camelCase field names)
+  const ctxWindow = d.context_window ?? d.contextWindow ?? {};
+  let ctxPct = ctxWindow.used_percentage ?? ctxWindow.usedPercentage;
   if (ctxPct === undefined || ctxPct === null) {
-    if (ctxWindow.total_input_tokens !== undefined && ctxWindow.total_input_tokens !== null) {
-      const windowSize = ctxWindow.context_window_size ?? 200000;
-      ctxPct = (ctxWindow.total_input_tokens / windowSize) * 100;
+    const usedTokens = ctxWindow.total_input_tokens ?? ctxWindow.totalInputTokens;
+    if (usedTokens !== undefined && usedTokens !== null) {
+      const windowSize = ctxWindow.context_window_size ?? ctxWindow.contextWindowSize ?? 200000;
+      ctxPct = (usedTokens / windowSize) * 100;
     } else {
       ctxPct = 0;
     }
   }
   const ctx = `${c.dim}ctx:${pctColor(ctxPct)}${ctxPct.toFixed(1)}%${c.reset}`;
 
-  // 3. Rate limit (from cache, with background stale-while-revalidate)
+  // 3. Rate limit (from cache, with stale-while-revalidate)
   let rl = `${c.dim}rl:-/-${c.reset}`;
   try {
+    const refreshScript = path.join(CLAUDE_DIR, 'scripts', 'session_start.js');
+
+    let cache = null;
     if (fs.existsSync(CACHE_FILE)) {
-      const cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-      if (cache.usage_pct !== undefined && cache.reset_in !== undefined) {
-        const rlPct = parseFloat(cache.usage_pct);
-        const stale = cache.updated_at && (Date.now() - new Date(cache.updated_at).getTime()) > CACHE_TTL_MS;
-        const staleMarker = stale ? `${c.dim}~` : '';
-        rl = `${c.dim}rl:${staleMarker}${pctColor(rlPct)}${cache.usage_pct}%${c.dim}/${cache.reset_in}${c.reset}`;
-        if (stale) {
-          // Trigger background refresh without blocking the status line render
-          const refreshScript = path.join(CLAUDE_DIR, 'scripts', 'session_start.js');
-          spawn('node', [refreshScript], { detached: true, stdio: 'ignore' }).unref();
-        }
-      }
+      cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    }
+
+    const age = cache?.updated_at ? Date.now() - new Date(cache.updated_at).getTime() : Infinity;
+
+    if (age >= CACHE_SYNC_TTL_MS) {
+      // Long idle: block and refresh synchronously so we show fresh data immediately
+      try {
+        execSync(`node "${refreshScript}"`, { timeout: 8000, stdio: 'ignore' });
+        cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+      } catch (e) {}
+    } else if (age >= CACHE_TTL_MS) {
+      // Slightly stale: background refresh, show current cache with stale marker
+      spawn('node', [refreshScript], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    }
+
+    if (cache?.usage_pct !== undefined && cache?.reset_in !== undefined) {
+      const rlPct = parseFloat(cache.usage_pct);
+      const freshAge = cache.updated_at ? Date.now() - new Date(cache.updated_at).getTime() : Infinity;
+      const staleMarker = freshAge >= CACHE_TTL_MS ? `${c.dim}~` : '';
+      rl = `${c.dim}rl:${staleMarker}${pctColor(rlPct)}${cache.usage_pct}%${c.dim}/${cache.reset_in}${c.reset}`;
     }
   } catch (e) {}
 

@@ -31,7 +31,23 @@ if [ -f "$SETTINGS_FILE" ]; then
       const incomingFile = path.join(process.argv[1], 'settings.json');
       const existing = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
       const incoming = JSON.parse(fs.readFileSync(incomingFile, 'utf8'));
+      // Deep-merge hooks: concatenate existing hook arrays with incoming ones
       const merged = { ...existing, ...incoming };
+      if (existing.hooks && incoming.hooks) {
+        merged.hooks = { ...existing.hooks };
+        for (const [event, hooks] of Object.entries(incoming.hooks)) {
+          if (merged.hooks[event]) {
+            // Avoid duplicating our own hooks on re-install
+            const ourCmds = hooks.flatMap(h => (h.hooks || []).map(hh => hh.command));
+            const filtered = merged.hooks[event].filter(h =>
+              !(h.hooks || []).some(hh => ourCmds.includes(hh.command))
+            );
+            merged.hooks[event] = [...filtered, ...hooks];
+          } else {
+            merged.hooks[event] = hooks;
+          }
+        }
+      }
       fs.writeFileSync(settingsFile, JSON.stringify(merged, null, 2) + '\n');
     " "$REPO_DIR"
     echo "[ok] settings.json merged (existing keys preserved)"
